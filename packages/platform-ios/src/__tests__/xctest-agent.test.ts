@@ -360,6 +360,73 @@ describe('xctest-agent orchestration', () => {
     expect(mocks.disposeClient).toHaveBeenCalledTimes(1);
   });
 
+  it('uses an external XCTest run file when configured', async () => {
+    const externalRoot = path.join(tempProjectRoot, 'external-xctest');
+    const externalXCTestRunFilePath = path.join(
+      externalRoot,
+      'HarnessXCTestAgent.xctestrun'
+    );
+    const externalDerivedDataPath = path.join(externalRoot, 'DerivedData');
+    const previousXCTestRunFilePath = process.env.HARNESS_IOS_XCTESTRUN_FILE;
+    const previousDerivedDataPath =
+      process.env.HARNESS_IOS_XCTEST_DERIVED_DATA_PATH;
+
+    fs.mkdirSync(externalRoot, { recursive: true });
+    fs.mkdirSync(externalDerivedDataPath, { recursive: true });
+    fs.writeFileSync(externalXCTestRunFilePath, 'external xctestrun');
+
+    try {
+      process.env.HARNESS_IOS_XCTESTRUN_FILE = externalXCTestRunFilePath;
+      process.env.HARNESS_IOS_XCTEST_DERIVED_DATA_PATH =
+        externalDerivedDataPath;
+
+      const controller = createXCTestAgentController({
+        port: 49154,
+        target: {
+          kind: 'simulator',
+          id: 'sim-123',
+        },
+      });
+
+      await controller.ensureStarted();
+
+      const buildCalls = mocks.spawn.mock.calls.filter(([file, args]) => {
+        return file === 'xcodebuild' && args?.[0] === 'build-for-testing';
+      });
+      const runCalls = mocks.spawn.mock.calls.filter(([file, args]) => {
+        return file === 'xcodebuild' && args?.[0] === 'test-without-building';
+      });
+      const runArgs = runCalls[0]?.[1];
+      const expectedRunArgs = expect.arrayContaining([
+        '-xctestrun',
+        externalXCTestRunFilePath,
+        '-derivedDataPath',
+        externalDerivedDataPath,
+      ]);
+
+      expect(buildCalls).toHaveLength(0);
+      expect(runCalls).toHaveLength(1);
+      expect(runArgs).toEqual(expectedRunArgs);
+      expect(runArgs).not.toContain('-project');
+      expect(runArgs).not.toContain('-scheme');
+
+      await controller.dispose();
+    } finally {
+      if (previousXCTestRunFilePath) {
+        process.env.HARNESS_IOS_XCTESTRUN_FILE = previousXCTestRunFilePath;
+      } else {
+        delete process.env.HARNESS_IOS_XCTESTRUN_FILE;
+      }
+
+      if (previousDerivedDataPath) {
+        process.env.HARNESS_IOS_XCTEST_DERIVED_DATA_PATH =
+          previousDerivedDataPath;
+      } else {
+        delete process.env.HARNESS_IOS_XCTEST_DERIVED_DATA_PATH;
+      }
+    }
+  });
+
   it('selects the device transport for physical devices', async () => {
     const controller = createXCTestAgentController({
       port: 49153,
